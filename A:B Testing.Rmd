@@ -1,0 +1,198 @@
+---
+title: "A/B Testing"
+author: "Saurabh Yelne"
+output:
+    rmdformats::material:
+     self_contained: no
+     cards: false
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(lubridate)
+library(rmdformats)
+library(knitr)
+suppressPackageStartupMessages(library(funModeling))
+library(tidyverse)
+library(scales)
+library(broom)
+library(RColorBrewer)
+library(powerMediation)
+library(plotly)
+```
+
+#Reading the clicks dataset 
+```{r}
+clicks <- read.csv("click_data.csv")
+head(clicks)
+```
+The dataset, which is related to a **dog adoption website**, has two columns and 3650 rows. The first column shows the date and the second column shows if the adopt today button on the webpage is clicked or not, 0= not clicked and 1= clicked
+
+#Find oldest and most recent date
+```{r}
+min(as.Date(clicks$visit_date))
+max(as.Date(clicks$visit_date))
+```
+So the dataset contains data from 1st January 2017 till 31st December 2017
+
+#What works better
+
+In order to perform the A/B testing we need a control, the current photo of a still dog on the website and a test which is the new playful photo of a dog. We want to decide which photo should be kept on the website homepage. Thus, I fell the playful dog photo will result in more ADOPT TODAY clicks i.e. more conversion rates. 
+
+**Conversion rate** is the number of people clicking the ADOPT TODAY button divided by the total people visiting the webpage.
+
+**Question**: Will changing the homepage photo result in more "ADOPT TODAY" clicks?
+
+**Hypothesis**: Using a photo of a playful dog will result in more "ADOPT TODAY!" clicks 
+
+**Dependent variable**: Clicked "ADOPT TODAY!" button or not
+
+**Independent variable**: Homepage photo.
+
+#Baseline conversion rates
+
+Baseline conversion rates must be known in order to decide whether the control is better that test or not. Lets find out with the clicks dataset
+
+###Yearly conversions
+```{r}
+clicks%>% summarise(conversion_rate = mean(clicked_adopt_today))
+```
+
+Yearly conversion rate for controal page is around 28%. But maybe there are some months where people adopt more. Lets find out.
+
+###Monthly conversions
+```{r}
+clicks %>%
+  group_by(month(visit_date)) %>%
+  summarise(conversion_rate = mean(clicked_adopt_today))
+```
+
+We see conversion for each month to see if there is any effect of seasonality.
+
+```{r}
+c <- clicks %>%
+  group_by(month(visit_date)) %>%
+  summarise(conversion_rate = mean(clicked_adopt_today))#%>%ggplot(., aes(x = `month(visit_date)`, y = conversion_rate)) +
+  #geom_point() +
+  #geom_line(color='lightseagreen')
+p1 <- plot_ly(c, x = ~`month(visit_date)`, y = ~conversion_rate, type = 'scatter', 
+              mode = 'lines+markers',color =I("lightseagreen") )
+p1
+```
+
+
+```{r}
+clicks %>%
+  group_by(weekdays(as.Date(visit_date))) %>%
+  summarise(conversion_rate = mean(clicked_adopt_today))%>%arrange(desc(conversion_rate))
+```
+
+###As we can see the conversion is not changing by much over the weekdays. 
+
+```{r}
+clicks %>%
+  group_by(week(visit_date)) %>%
+  summarise(conversion_rate = mean(clicked_adopt_today))
+```
+
+```{r}
+w<- clicks %>%
+  group_by(week(visit_date)) %>%
+  summarise(conversion_rate = mean(clicked_adopt_today))
+
+
+g <- ggplot(w, aes(x = `week(visit_date)`,y = conversion_rate)) +
+  geom_point() +
+  geom_line() +  geom_path(color='peru',size = 1)+
+  scale_y_continuous(limits = c(0, 1),
+                     labels = percent)+xlab('Week')+ylab('Conversion Rate')
+
+p <- plot_ly(w, x = ~`week(visit_date)`, y = ~conversion_rate, type = 'scatter', mode = 'lines+markers')
+p
+```
+
+The plot shows the  seasonal conversion rates by week of the year
+
+#Power Analysis 
+
+**Statistical test** - statistical test you plan to run
+
+**Baseline value** - value for the current control condition
+
+**Desired value** - expected value for the test condition
+
+**Proportion** of the data from the test condition (ideally 0.5)
+
+**Significance threshold** / alpha - level where effect is significant (generally 0.05)
+
+**Power** / 1 - Beta - Probability correctly rejecting null hypothesis (generally 0.8)
+
+#Number of samples/ data points to run the A/B test
+
+```{r}
+total_sample_size <- SSizeLogisticBin(p1 = 0.2,
+                                      p2 = 0.3,
+                                      B = 0.5,
+                                      alpha = 0.05,
+                                      power = 0.8)
+ total_sample_size
+ 
+ total_sample_size/2
+```
+
+###Thus we require total 587 data points which means 294 each for test and control
+
+### Now after running the experiment and collecting the data, we will try to find out if there is statistical difference between test and control. This data is saved in the experiment data. 
+
+#Lets load the data and analyze
+
+```{r}
+exp <- read.csv("experiment_data.csv")
+head(exp)
+```
+
+As we can observe, we have one more column in the dataset called condition which tells us if the user is clicking the adopt button from control page or test page.
+
+#Finding the conversion rates for the control and test conditon
+
+```{r}
+exp %>%
+  group_by(condition) %>%
+  summarise(conversion_rate = mean(clicked_adopt_today))
+```
+
+As observed, the conversion rate for control is around 17% and test is 38%. This difference looks large. 
+
+#Plotting the control and test conditions
+
+```{r}
+expp <- exp %>%
+  group_by(day(visit_date), condition) %>%
+  summarise(conversion_rate = mean(clicked_adopt_today))
+
+ggplot(expp,aes(x = `day(visit_date)`,
+           y = conversion_rate,
+           color = condition,
+           group = condition)) +
+  geom_point() +
+  geom_line()
+
+```
+
+###Thus from the plot we can observe that the test condition is almost always having a high conversion rate than the control
+
+#Statistical analysis
+
+###As the dependent variable 'clicked_adopt_today' is binary, we will use logistic regression for statistical analysis
+
+```{r}
+glm(clicked_adopt_today ~ condition,
+    family = "binomial",
+    data = exp) %>%
+  tidy()
+```
+
+###For condition test, the p-value is very small and thus it is significant. Thus we can conclude test is significantly important and the conversion rate difference between the test and the control are statistically significant. Also the test estimate is positive  showing the test condition has a higher control rate than control.
+
+#Conclusion:- Our experiment was a success and the test conversion rates are higher than control is proved statistically
+
